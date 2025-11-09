@@ -1,1 +1,131 @@
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <string>
+#include <cstdlib>
 
+#pragma pack(push,1)
+struct BMPFileHeader {
+    unsigned short bfType;
+    unsigned int bfSize;
+    unsigned short bfReserved1;
+    unsigned short bfReserved2;
+    unsigned int bfOffBits;
+};
+struct BMPInfoHeader {
+    unsigned int biSize;
+    int biWidth;
+    int biHeight;
+    unsigned short biPlanes;
+    unsigned short biBitCount;
+    unsigned int biCompression;
+    unsigned int biSizeImage;
+    int biXPelsPerMeter;
+    int biYPelsPerMeter;
+    unsigned int biClrUsed;
+    unsigned int biClrImportant;
+};
+#pragma pack(pop)
+
+bool loadBMP(const char* fname, int &w, int &h, std::vector<unsigned char> &pix) {
+    std::ifstream in(fname, std::ios::binary);
+    if (!in) return false;
+    BMPFileHeader fh; BMPInfoHeader ih;
+    in.read((char*)&fh, sizeof(fh));
+    in.read((char*)&ih, sizeof(ih));
+    if (fh.bfType != 0x4D42 || ih.biBitCount != 24 || ih.biCompression != 0) { in.close(); return false; }
+    w = ih.biWidth; h = ih.biHeight;
+    int rowSize = ((w*3 + 3)/4)*4;
+    pix.assign(w*h*3, 0);
+    std::vector<unsigned char> row(rowSize);
+    in.seekg(fh.bfOffBits, std::ios::beg);
+    for (int y = 0; y < h; ++y) {
+        in.read((char*)&row[0], rowSize);
+        int outY = h - 1 - y;
+        for (int x = 0; x < w; ++x) {
+            int r = row[x*3+2], g = row[x*3+1], b = row[x*3+0];
+            int idx = (outY*w + x)*3;
+            pix[idx+0] = (unsigned char)r;
+            pix[idx+1] = (unsigned char)g;
+            pix[idx+2] = (unsigned char)b;
+        }
+    }
+    in.close();
+    return true;
+}
+
+bool saveBMP(const char* fname, int w, int h, const std::vector<unsigned char> &pix) {
+    std::ofstream out(fname, std::ios::binary);
+    if (!out) return false;
+    BMPFileHeader fh; BMPInfoHeader ih;
+    int rowSize = ((w*3 + 3)/4)*4;
+    int dataSize = rowSize*h;
+    fh.bfType = 0x4D42; fh.bfOffBits = sizeof(fh) + sizeof(ih); fh.bfSize = fh.bfOffBits + dataSize;
+    fh.bfReserved1 = fh.bfReserved2 = 0;
+    ih.biSize = sizeof(ih); ih.biWidth = w; ih.biHeight = h; ih.biPlanes = 1; ih.biBitCount = 24;
+    ih.biCompression = 0; ih.biSizeImage = dataSize; ih.biXPelsPerMeter = ih.biYPelsPerMeter = 0;
+    ih.biClrUsed = ih.biClrImportant = 0;
+    out.write((char*)&fh, sizeof(fh)); out.write((char*)&ih, sizeof(ih));
+    std::vector<unsigned char> row(rowSize);
+    for (int y = 0; y < h; ++y) {
+        int inY = h - 1 - y;
+        for (int x = 0; x < w; ++x) {
+            int idx = (inY*w + x)*3;
+            row[x*3+0] = pix[idx+2];
+            row[x*3+1] = pix[idx+1];
+            row[x*3+2] = pix[idx+0];
+        }
+        for (int p = w*3; p < rowSize; ++p) row[p] = 0;
+        out.write((char*)&row[0], rowSize);
+    }
+    out.close();
+    return true;
+}
+
+// simple ops
+void grayscale(int w, int h, std::vector<unsigned char> &pix) {
+    for (int i = 0; i < w*h; ++i) {
+        int idx = i*3;
+        unsigned char r = pix[idx+0], g = pix[idx+1], b = pix[idx+2];
+        unsigned char gval = (unsigned char)(0.21*r + 0.72*g + 0.07*b);
+        pix[idx+0] = pix[idx+1] = pix[idx+2] = gval;
+    }
+}
+void invert(int w, int h, std::vector<unsigned char> &pix) {
+    for (int i = 0; i < w*h*3; ++i) pix[i] = 255 - pix[i];
+}
+void brighten(int w, int h, std::vector<unsigned char> &pix, int delta) {
+    for (int i = 0; i < w*h*3; ++i) {
+        int v = (int)pix[i] + delta;
+        if (v < 0) v = 0; if (v > 255) v = 255;
+        pix[i] = (unsigned char)v;
+    }
+}
+
+int main() {
+    std::cout << "Enter input BMP filename (24-bit): ";
+    std::string inname; std::getline(std::cin, inname);
+    int w=0,h=0; std::vector<unsigned char> img;
+    if (!loadBMP(inname.c_str(), w, h, img)) { std::cout << "Failed to load BMP.\n"; return 1; }
+    while (1) {
+        std::cout << "\nImage: " << w << "x" << h << "\n"
+                  << "1: Grayscale  2: Invert  3: Brightness  4: Save & Exit  5: Exit\nChoice: ";
+        std::string s; std::getline(std::cin, s);
+        if (s.size()==0) continue;
+        int c = std::atoi(s.c_str());
+        if (c==1) { grayscale(w,h,img); std::cout<<"Done grayscale\n"; }
+        else if (c==2) { invert(w,h,img); std::cout<<"Done invert\n"; }
+        else if (c==3) {
+            std::cout<<"Enter delta (-255..255): "; std::getline(std::cin,s);
+            int d = std::atoi(s.c_str()); brighten(w,h,img,d); std::cout<<"Brightness changed\n";
+        }
+        else if (c==4) {
+            std::cout<<"Enter output BMP filename: "; std::string out; std::getline(std::cin,out);
+            if (saveBMP(out.c_str(), w, h, img)) std::cout<<"Saved to "<<out<<"\n"; else std::cout<<"Save failed\n";
+            break;
+        }
+        else if (c==5) break;
+        else std::cout<<"Invalid\n";
+    }
+    return 0;
+}
